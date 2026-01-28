@@ -8,6 +8,14 @@ app = Flask(__name__)
 # Load Pareto data
 CSV_PATH = os.path.join(os.path.dirname(__file__), "data", "pareto_front.csv")
 pf = pd.read_csv(CSV_PATH)
+Y_MIN, Y_MAX = float(pf["Yield_pct"].min()), float(pf["Yield_pct"].max())
+C_MIN, C_MAX = float(pf["Cost_index"].min()), float(pf["Cost_index"].max())
+T_MIN, T_MAX = float(pf["Time_h"].min()), float(pf["Time_h"].max())
+
+def norm01(x, xmin, xmax):
+    if abs(xmax - xmin) < 1e-12:
+        return 0.5
+    return (x - xmin) / (xmax - xmin)
 
 def minmax(arr: np.ndarray) -> np.ndarray:
     amin = float(np.min(arr))
@@ -35,6 +43,7 @@ def recommend():
 
     df = pf.copy()
 
+    # Apply constraints
     if min_yield is not None:
         df = df[df["Yield_pct"] >= float(min_yield)]
     if max_cost is not None:
@@ -45,23 +54,30 @@ def recommend():
     if len(df) == 0:
         return jsonify({"error": "No Pareto points match these constraints. Relax limits."}), 400
 
-    y = df["Yield_pct"].to_numpy(float)      # maximize
-    c = df["Cost_index"].to_numpy(float)     # minimize
-    t = df["Time_h"].to_numpy(float)         # minimize
+    # ✅ Global normalization (stable, weights actually matter)
+    y_n = df["Yield_pct"].apply(lambda v: norm01(v, Y_MIN, Y_MAX)).to_numpy(float)
+    c_n = df["Cost_index"].apply(lambda v: norm01(v, C_MIN, C_MAX)).to_numpy(float)
+    t_n = df["Time_h"].apply(lambda v: norm01(v, T_MIN, T_MAX)).to_numpy(float)
 
-    y_n = minmax(y)
-    c_n = minmax(c)
-    t_n = minmax(t)
-
+    # Normalize weights
     s = w_yield + w_cost + w_time
     if s <= 0:
         return jsonify({"error": "Weights must sum to a positive value."}), 400
     w_yield, w_cost, w_time = w_yield/s, w_cost/s, w_time/s
 
+    # Score (maximize)
     score = (w_yield * y_n) - (w_cost * c_n) - (w_time * t_n)
+
     df = df.assign(Score=score).sort_values("Score", ascending=False)
 
     best = df.iloc[0].to_dict()
     top = df.head(10).to_dict(orient="records")
 
-    return jsonify({"best": best, "top": top}), 200
+    return jsonify({
+        "best": best,
+        "top": top,
+        "debug": {
+            "feasible_points": int(len(df)),
+            "weights_used": {"yield": w_yield, "cost": w_cost, "time": w_time}
+        }
+    }), 200
