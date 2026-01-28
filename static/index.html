@@ -1,0 +1,141 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Ibuprofen Pareto Selector</title>
+  <style>
+    body { font-family: Arial; max-width: 900px; margin: 30px auto; }
+    .row { display: grid; grid-template-columns: 200px 1fr 80px; gap: 12px; align-items: center; margin: 10px 0; }
+    input[type="range"] { width: 100%; }
+    .card { border: 1px solid #ddd; padding: 12px; border-radius: 10px; margin-top: 14px; }
+    .error { color: #b00020; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid #eee; padding: 8px; text-align: left; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h2>Choose your preferences</h2>
+
+  <h3>Weights</h3>
+  <div class="row">
+    <label>Yield weight</label>
+    <input id="w_yield" type="range" min="0" max="100" value="50">
+    <div id="w_yield_val">50</div>
+  </div>
+  <div class="row">
+    <label>Cost weight</label>
+    <input id="w_cost" type="range" min="0" max="100" value="30">
+    <div id="w_cost_val">30</div>
+  </div>
+  <div class="row">
+    <label>Time weight</label>
+    <input id="w_time" type="range" min="0" max="100" value="20">
+    <div id="w_time_val">20</div>
+  </div>
+
+  <h3>Constraints (optional)</h3>
+  <div class="row">
+    <label>Min Yield (%)</label>
+    <input id="min_yield" type="range" min="60" max="95" value="85">
+    <div id="min_yield_val">85</div>
+  </div>
+  <div class="row">
+    <label>Max Cost index</label>
+    <input id="max_cost" type="range" min="0.10" max="0.90" step="0.01" value="0.55">
+    <div id="max_cost_val">0.55</div>
+  </div>
+  <div class="row">
+    <label>Max Time (h)</label>
+    <input id="max_time" type="range" min="1" max="6" step="0.1" value="4">
+    <div id="max_time_val">4.0</div>
+  </div>
+
+  <button id="runBtn">Recommend best point</button>
+  <p id="msg" class="error"></p>
+
+  <div class="card" id="bestCard" style="display:none;"></div>
+  <div class="card" id="topCard" style="display:none;"></div>
+
+<script>
+  const ids = ["w_yield","w_cost","w_time","min_yield","max_cost","max_time"];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    const out = document.getElementById(id + "_val");
+    const update = () => out.textContent = (id==="max_time") ? Number(el.value).toFixed(1) : el.value;
+    el.addEventListener("input", update);
+    update();
+  });
+
+  function toWeights() {
+    // Convert 0–100 slider to 0–1 floats
+    return {
+      w_yield: Number(document.getElementById("w_yield").value) / 100,
+      w_cost:  Number(document.getElementById("w_cost").value) / 100,
+      w_time:  Number(document.getElementById("w_time").value) / 100,
+      min_yield: Number(document.getElementById("min_yield").value),
+      max_cost:  Number(document.getElementById("max_cost").value),
+      max_time:  Number(document.getElementById("max_time").value),
+    };
+  }
+
+  function renderBest(best) {
+    const card = document.getElementById("bestCard");
+    card.style.display = "block";
+    card.innerHTML = `
+      <h3>Best recommended point</h3>
+      <b>Yield:</b> ${best.Yield_pct.toFixed(2)}% &nbsp; | &nbsp;
+      <b>Cost:</b> ${best.Cost_index.toFixed(3)} &nbsp; | &nbsp;
+      <b>Time:</b> ${best.Time_h.toFixed(2)} h
+      <hr>
+      <div><b>T:</b> ${best.Temp_C.toFixed(2)} °C &nbsp; <b>P:</b> ${best.Pressure_bar.toFixed(2)} bar</div>
+      <div><b>Pd:</b> ${best.Conc_Pd.toFixed(5)} &nbsp; <b>S/R:</b> ${best.Solvent_to_reactant.toFixed(2)}</div>
+      <div><b>N:</b> ${best.N_rpm.toFixed(0)} rpm &nbsp; <b>yCO:</b> ${best.yCO.toFixed(2)} &nbsp; <b>P_CO:</b> ${best.P_CO_bar.toFixed(2)} bar</div>
+    `;
+  }
+
+  function renderTop(top10) {
+    const card = document.getElementById("topCard");
+    card.style.display = "block";
+    const rows = top10.map(r => `
+      <tr>
+        <td>${r.Score.toFixed(4)}</td>
+        <td>${r.Yield_pct.toFixed(2)}</td>
+        <td>${r.Cost_index.toFixed(3)}</td>
+        <td>${r.Time_h.toFixed(2)}</td>
+        <td>${r.Temp_C.toFixed(1)}</td>
+        <td>${r.Pressure_bar.toFixed(1)}</td>
+      </tr>
+    `).join("");
+    card.innerHTML = `
+      <h3>Top alternatives</h3>
+      <table>
+        <thead><tr>
+          <th>Score</th><th>Yield</th><th>Cost</th><th>Time</th><th>T</th><th>P</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  document.getElementById("runBtn").addEventListener("click", async () => {
+    document.getElementById("msg").textContent = "";
+    const payload = toWeights();
+
+    const res = await fetch("/api/recommend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({error:"Request failed"}));
+      document.getElementById("msg").textContent = err.error || "Request failed";
+      return;
+    }
+    const out = await res.json();
+    renderBest(out.best);
+    renderTop(out.top10);
+  });
+</script>
+</body>
+</html>
