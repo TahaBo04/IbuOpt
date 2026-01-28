@@ -1,0 +1,158 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>IbuOpt — Pareto Selector</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, Arial; max-width: 980px; margin: 28px auto; padding: 0 14px; }
+    .grid { display: grid; grid-template-columns: 220px 1fr 70px; gap: 12px; align-items: center; margin: 10px 0; }
+    input[type="range"] { width: 100%; }
+    .card { border: 1px solid #e6e6e6; border-radius: 14px; padding: 14px; margin-top: 14px; }
+    .muted { color: #666; font-size: 13px; }
+    .err { color: #b00020; margin-top: 10px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px; border-bottom: 1px solid #eee; font-size: 14px; text-align: left; }
+    button { padding: 10px 14px; border-radius: 12px; border: 1px solid #ddd; background: white; cursor: pointer; }
+    button:hover { background: #f7f7f7; }
+    .row2 { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .pill { padding: 6px 10px; border: 1px solid #eee; border-radius: 999px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h2>IbuOpt — Choose your trade-off</h2>
+  <div class="muted">Slide your preferences. We’ll pick the best point from the Pareto front.</div>
+
+  <h3>Weights</h3>
+  <div class="grid">
+    <label>Yield weight</label>
+    <input id="w_yield" type="range" min="0" max="100" value="55">
+    <div id="w_yield_val">55</div>
+  </div>
+  <div class="grid">
+    <label>Cost weight</label>
+    <input id="w_cost" type="range" min="0" max="100" value="30">
+    <div id="w_cost_val">30</div>
+  </div>
+  <div class="grid">
+    <label>Time weight</label>
+    <input id="w_time" type="range" min="0" max="100" value="15">
+    <div id="w_time_val">15</div>
+  </div>
+
+  <h3>Constraints (optional)</h3>
+  <div class="grid">
+    <label>Min Yield (%)</label>
+    <input id="min_yield" type="range" min="60" max="95" value="85">
+    <div id="min_yield_val">85</div>
+  </div>
+  <div class="grid">
+    <label>Max Cost index</label>
+    <input id="max_cost" type="range" min="0.10" max="0.90" step="0.01" value="0.60">
+    <div id="max_cost_val">0.60</div>
+  </div>
+  <div class="grid">
+    <label>Max Time (h)</label>
+    <input id="max_time" type="range" min="1" max="6" step="0.1" value="4.0">
+    <div id="max_time_val">4.0</div>
+  </div>
+
+  <div class="row2">
+    <button id="btn">Recommend</button>
+    <span class="pill" id="status">Ready</span>
+  </div>
+  <div class="err" id="err"></div>
+
+  <div class="card" id="bestCard" style="display:none;"></div>
+  <div class="card" id="topCard" style="display:none;"></div>
+
+<script>
+  const sliderIds = ["w_yield","w_cost","w_time","min_yield","max_cost","max_time"];
+  sliderIds.forEach(id => {
+    const el = document.getElementById(id);
+    const out = document.getElementById(id + "_val");
+    const update = () => {
+      if (id === "max_time") out.textContent = Number(el.value).toFixed(1);
+      else if (id === "max_cost") out.textContent = Number(el.value).toFixed(2);
+      else out.textContent = el.value;
+    };
+    el.addEventListener("input", update);
+    update();
+  });
+
+  function payload() {
+    return {
+      w_yield: Number(document.getElementById("w_yield").value) / 100,
+      w_cost:  Number(document.getElementById("w_cost").value) / 100,
+      w_time:  Number(document.getElementById("w_time").value) / 100,
+      min_yield: Number(document.getElementById("min_yield").value),
+      max_cost:  Number(document.getElementById("max_cost").value),
+      max_time:  Number(document.getElementById("max_time").value),
+      top_k: 10
+    };
+  }
+
+  function fmt(x, d=2){ return Number(x).toFixed(d); }
+
+  function renderBest(b) {
+    const card = document.getElementById("bestCard");
+    card.style.display = "block";
+    card.innerHTML = `
+      <h3>Best point</h3>
+      <div class="row2">
+        <span class="pill"><b>Yield</b>: ${fmt(b.Yield_pct)}%</span>
+        <span class="pill"><b>Cost</b>: ${fmt(b.Cost_index,3)}</span>
+        <span class="pill"><b>Time</b>: ${fmt(b.Time_h)} h</span>
+        <span class="pill"><b>Score</b>: ${fmt(b.Score,4)}</span>
+      </div>
+      <hr/>
+      <div><b>T</b>: ${fmt(b.Temp_C)} °C &nbsp; | &nbsp; <b>P</b>: ${fmt(b.Pressure_bar)} bar</div>
+      <div><b>Pd</b>: ${fmt(b.Conc_Pd,5)} &nbsp; | &nbsp; <b>S/R</b>: ${fmt(b.Solvent_to_reactant)} </div>
+      <div><b>N</b>: ${fmt(b.N_rpm,0)} rpm &nbsp; | &nbsp; <b>yCO</b>: ${fmt(b.yCO,2)} &nbsp; | &nbsp; <b>P_CO</b>: ${fmt(b.P_CO_bar)} bar</div>
+    `;
+  }
+
+  function renderTop(list) {
+    const card = document.getElementById("topCard");
+    card.style.display = "block";
+    const rows = list.map(r => `
+      <tr>
+        <td>${fmt(r.Score,4)}</td>
+        <td>${fmt(r.Yield_pct)}</td>
+        <td>${fmt(r.Cost_index,3)}</td>
+        <td>${fmt(r.Time_h)}</td>
+        <td>${fmt(r.Temp_C,1)}</td>
+        <td>${fmt(r.Pressure_bar,1)}</td>
+      </tr>
+    `).join("");
+    card.innerHTML = `
+      <h3>Top alternatives</h3>
+      <table>
+        <thead><tr><th>Score</th><th>Yield</th><th>Cost</th><th>Time</th><th>T</th><th>P</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  document.getElementById("btn").addEventListener("click", async () => {
+    document.getElementById("err").textContent = "";
+    document.getElementById("status").textContent = "Running...";
+    try {
+      const res = await fetch("/api/recommend", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload())
+      });
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.error || "Request failed");
+      renderBest(out.best);
+      renderTop(out.top);
+      document.getElementById("status").textContent = "Done";
+    } catch (e) {
+      document.getElementById("status").textContent = "Error";
+      document.getElementById("err").textContent = e.message;
+    }
+  });
+</script>
+</body>
+</html>
